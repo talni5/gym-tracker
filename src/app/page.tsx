@@ -4,24 +4,37 @@ import { useState, useEffect, useCallback } from "react";
 import {
   Dumbbell,
   Plus,
-  TrendingUp,
   Flame,
-  Trophy,
-  ChevronRight,
   X,
   Target,
-  Zap,
-  Calendar,
-  BarChart3,
   Trash2,
-  Edit3,
   Check,
-  Star,
-  Medal,
+  Timer,
+  TrendingUp,
+  TrendingDown,
+  History,
+  Trophy,
 } from "lucide-react";
 
-type ExerciseType = "weighted" | "bodyweight";
+type ExerciseType = "weighted" | "bodyweight" | "timed";
 type AssistanceBand = "none" | "heavy" | "medium" | "light";
+
+const BAND_LABELS: Record<AssistanceBand, string> = {
+  none: "No Band",
+  heavy: "Heavy Band",
+  medium: "Medium Band",
+  light: "Light Band",
+};
+
+interface HistoryEntry {
+  id: string;
+  date: string;
+  weight?: number;
+  reps?: number;
+  sets?: number;
+  assistanceBand?: AssistanceBand;
+  duration?: number;
+}
 
 interface Exercise {
   id: string;
@@ -29,32 +42,60 @@ interface Exercise {
   type: ExerciseType;
   category: string;
   icon: string;
+  currentWeight?: number;
+  currentReps?: number;
+  currentSets?: number;
+  assistanceBand?: AssistanceBand;
+  currentDuration?: number;
+  history: HistoryEntry[];
 }
 
-interface WorkoutEntry {
-  id: string;
-  exerciseId: string;
-  date: string;
-  weight?: number;
-  reps: number;
-  sets: number;
-  assistanceBand?: AssistanceBand;
-  notes?: string;
+function formatDuration(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  if (mins === 0) return `${secs}s`;
+  if (secs === 0) return `${mins}m`;
+  return `${mins}m ${secs}s`;
+}
+
+function formatDate(dateString: string): string {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
+  
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return `${diffDays} days ago`;
+  
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function formatFullDate(dateString: string): string {
+  return new Date(dateString).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 const PRESET_EXERCISES: Exercise[] = [
-  { id: "squat", name: "Squat", type: "weighted", category: "Legs", icon: "🦵" },
-  { id: "deadlift", name: "Deadlift", type: "weighted", category: "Back", icon: "💪" },
-  { id: "bench", name: "Bench Press", type: "weighted", category: "Chest", icon: "🏋️" },
-  { id: "ohp", name: "Overhead Press", type: "weighted", category: "Shoulders", icon: "🙌" },
-  { id: "row", name: "Barbell Row", type: "weighted", category: "Back", icon: "🚣" },
-  { id: "curl", name: "Bicep Curl", type: "weighted", category: "Arms", icon: "💪" },
-  { id: "tricep", name: "Tricep Extension", type: "weighted", category: "Arms", icon: "🔱" },
-  { id: "pullup", name: "Pull-up", type: "bodyweight", category: "Back", icon: "🧗" },
-  { id: "pushup", name: "Push-up", type: "bodyweight", category: "Chest", icon: "🫸" },
-  { id: "dip", name: "Dip", type: "bodyweight", category: "Chest", icon: "⬇️" },
-  { id: "plank", name: "Plank", type: "bodyweight", category: "Core", icon: "🧘" },
-  { id: "lunge", name: "Lunges", type: "bodyweight", category: "Legs", icon: "🚶" },
+  { id: "squat", name: "Squat", type: "weighted", category: "Legs", icon: "🦵", history: [] },
+  { id: "deadlift", name: "Deadlift", type: "weighted", category: "Back", icon: "💪", history: [] },
+  { id: "bench", name: "Bench Press", type: "weighted", category: "Chest", icon: "🏋️", history: [] },
+  { id: "ohp", name: "Overhead Press", type: "weighted", category: "Shoulders", icon: "🙌", history: [] },
+  { id: "row", name: "Barbell Row", type: "weighted", category: "Back", icon: "🚣", history: [] },
+  { id: "curl", name: "Bicep Curl", type: "weighted", category: "Arms", icon: "💪", history: [] },
+  { id: "tricep", name: "Tricep Extension", type: "weighted", category: "Arms", icon: "🔱", history: [] },
+  { id: "pullup", name: "Pull-up", type: "bodyweight", category: "Back", icon: "🧗", history: [] },
+  { id: "pushup", name: "Push-up", type: "bodyweight", category: "Chest", icon: "🫸", history: [] },
+  { id: "dip", name: "Dip", type: "bodyweight", category: "Chest", icon: "⬇️", history: [] },
+  { id: "plank", name: "Plank", type: "timed", category: "Core", icon: "🧘", history: [] },
+  { id: "lunge", name: "Lunges", type: "bodyweight", category: "Legs", icon: "🚶", history: [] },
+  { id: "wallsit", name: "Wall Sit", type: "timed", category: "Legs", icon: "🪑", history: [] },
 ];
 
 const MOTIVATIONAL_QUOTES = [
@@ -68,13 +109,6 @@ const MOTIVATIONAL_QUOTES = [
   "Progress, not perfection. Every workout is a step forward.",
 ];
 
-const BAND_LABELS: Record<AssistanceBand, string> = {
-  none: "No Band",
-  heavy: "Heavy Band",
-  medium: "Medium Band",
-  light: "Light Band",
-};
-
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
@@ -85,58 +119,91 @@ function getWeekNumber(date: Date): number {
   return Math.ceil((days + startOfYear.getDay() + 1) / 7);
 }
 
-function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+function getPR(history: HistoryEntry[], type: ExerciseType): { weight?: number; reps?: number; duration?: number } | null {
+  if (history.length === 0) return null;
+  
+  if (type === "weighted") {
+    const maxWeight = Math.max(...history.filter(h => h.weight).map(h => h.weight!));
+    return maxWeight > 0 ? { weight: maxWeight } : null;
+  }
+  
+  if (type === "bodyweight") {
+    const maxReps = Math.max(...history.filter(h => h.reps).map(h => h.reps!));
+    return maxReps > 0 ? { reps: maxReps } : null;
+  }
+  
+  if (type === "timed") {
+    const maxDuration = Math.max(...history.filter(h => h.duration).map(h => h.duration!));
+    return maxDuration > 0 ? { duration: maxDuration } : null;
+  }
+  
+  return null;
 }
 
-function getDaysSinceLastWorkout(entries: WorkoutEntry[], exerciseId: string): number | null {
-  const exerciseEntries = entries
-    .filter((e) => e.exerciseId === exerciseId)
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-  if (exerciseEntries.length === 0) return null;
-
-  const lastDate = new Date(exerciseEntries[0].date);
-  const today = new Date();
-  const diffTime = today.getTime() - lastDate.getTime();
-  return Math.floor(diffTime / (1000 * 60 * 60 * 24));
+function isNewPR(entry: HistoryEntry, history: HistoryEntry[], type: ExerciseType): boolean {
+  const previousEntries = history.filter(h => h.id !== entry.id);
+  if (previousEntries.length === 0) return true;
+  
+  if (type === "weighted" && entry.weight) {
+    const prevMax = Math.max(...previousEntries.filter(h => h.weight).map(h => h.weight!), 0);
+    return entry.weight > prevMax;
+  }
+  
+  if (type === "bodyweight" && entry.reps) {
+    const prevMax = Math.max(...previousEntries.filter(h => h.reps).map(h => h.reps!), 0);
+    return entry.reps > prevMax;
+  }
+  
+  if (type === "timed" && entry.duration) {
+    const prevMax = Math.max(...previousEntries.filter(h => h.duration).map(h => h.duration!), 0);
+    return entry.duration > prevMax;
+  }
+  
+  return false;
 }
 
-function getProgressData(entries: WorkoutEntry[], exerciseId: string): { current: number; previous: number; percentChange: number } | null {
-  const exerciseEntries = entries
-    .filter((e) => e.exerciseId === exerciseId && e.weight !== undefined)
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-  if (exerciseEntries.length < 2) return null;
-
-  const current = exerciseEntries[0].weight!;
-  const previous = exerciseEntries[exerciseEntries.length - 1].weight!;
-  const percentChange = previous === 0 ? 0 : ((current - previous) / previous) * 100;
-
-  return { current, previous, percentChange };
+function getProgressFromPrevious(entry: HistoryEntry, prevEntry: HistoryEntry | null, type: ExerciseType): "up" | "down" | "same" | null {
+  if (!prevEntry) return null;
+  
+  if (type === "weighted" && entry.weight && prevEntry.weight) {
+    if (entry.weight > prevEntry.weight) return "up";
+    if (entry.weight < prevEntry.weight) return "down";
+    return "same";
+  }
+  
+  if (type === "bodyweight" && entry.reps && prevEntry.reps) {
+    if (entry.reps > prevEntry.reps) return "up";
+    if (entry.reps < prevEntry.reps) return "down";
+    return "same";
+  }
+  
+  if (type === "timed" && entry.duration && prevEntry.duration) {
+    if (entry.duration > prevEntry.duration) return "up";
+    if (entry.duration < prevEntry.duration) return "down";
+    return "same";
+  }
+  
+  return null;
 }
 
 export default function GymTracker() {
   const [exercises, setExercises] = useState<Exercise[]>(PRESET_EXERCISES);
-  const [entries, setEntries] = useState<WorkoutEntry[]>([]);
-  const [showAddModal, setShowAddModal] = useState(false);
   const [showExerciseModal, setShowExerciseModal] = useState(false);
+  const [showWeightModal, setShowWeightModal] = useState(false);
+  const [showBandModal, setShowBandModal] = useState(false);
+  const [showTimeModal, setShowTimeModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [selectedExercise, setSelectedExercise] = useState<Exercise | null>(null);
-  const [currentView, setCurrentView] = useState<"dashboard" | "history" | "add">("dashboard");
   const [motivationalQuote, setMotivationalQuote] = useState("");
   const [showMotivation, setShowMotivation] = useState(false);
 
-  // Form state
+  // Weight form
   const [formWeight, setFormWeight] = useState<string>("");
-  const [formReps, setFormReps] = useState<string>("10");
-  const [formSets, setFormSets] = useState<string>("3");
+  const [formReps, setFormReps] = useState<string>("");
+  const [formSets, setFormSets] = useState<string>("");
   const [formBand, setFormBand] = useState<AssistanceBand>("none");
-  const [formNotes, setFormNotes] = useState<string>("");
+  const [formMinutes, setFormMinutes] = useState<string>("0");
+  const [formSeconds, setFormSeconds] = useState<string>("0");
 
   // Custom exercise form
   const [newExerciseName, setNewExerciseName] = useState("");
@@ -146,14 +213,16 @@ export default function GymTracker() {
   // Load from localStorage
   useEffect(() => {
     const savedExercises = localStorage.getItem("gym-exercises");
-    const savedEntries = localStorage.getItem("gym-entries");
     const lastMotivation = localStorage.getItem("gym-last-motivation");
 
     if (savedExercises) {
-      setExercises(JSON.parse(savedExercises));
-    }
-    if (savedEntries) {
-      setEntries(JSON.parse(savedEntries));
+      const parsed = JSON.parse(savedExercises);
+      // Ensure all exercises have history array (migration)
+      const migrated = parsed.map((e: Exercise) => ({
+        ...e,
+        history: e.history || [],
+      }));
+      setExercises(migrated);
     }
 
     // Check if we should show motivation (once per week)
@@ -170,39 +239,22 @@ export default function GymTracker() {
     localStorage.setItem("gym-exercises", JSON.stringify(exercises));
   }, [exercises]);
 
-  useEffect(() => {
-    localStorage.setItem("gym-entries", JSON.stringify(entries));
-  }, [entries]);
-
-  const handleAddEntry = useCallback(() => {
-    if (!selectedExercise) return;
-
-    const newEntry: WorkoutEntry = {
-      id: generateId(),
-      exerciseId: selectedExercise.id,
-      date: new Date().toISOString(),
-      weight: selectedExercise.type === "weighted" ? parseFloat(formWeight) || undefined : undefined,
-      reps: parseInt(formReps) || 10,
-      sets: parseInt(formSets) || 3,
-      assistanceBand: selectedExercise.type === "bodyweight" ? formBand : undefined,
-      notes: formNotes || undefined,
-    };
-
-    setEntries((prev) => [...prev, newEntry]);
-    resetForm();
-    setShowAddModal(false);
-    setSelectedExercise(null);
-  }, [selectedExercise, formWeight, formReps, formSets, formBand, formNotes]);
-
   const handleAddExercise = useCallback(() => {
     if (!newExerciseName.trim()) return;
+
+    const icons: Record<ExerciseType, string> = {
+      weighted: "🏋️",
+      bodyweight: "🧘",
+      timed: "⏱️",
+    };
 
     const newExercise: Exercise = {
       id: generateId(),
       name: newExerciseName.trim(),
       type: newExerciseType,
       category: newExerciseCategory,
-      icon: newExerciseType === "weighted" ? "🏋️" : "🧘",
+      icon: icons[newExerciseType],
+      history: [],
     };
 
     setExercises((prev) => [...prev, newExercise]);
@@ -212,40 +264,187 @@ export default function GymTracker() {
     setShowExerciseModal(false);
   }, [newExerciseName, newExerciseType, newExerciseCategory]);
 
-  const handleDeleteEntry = useCallback((entryId: string) => {
-    setEntries((prev) => prev.filter((e) => e.id !== entryId));
+  const handleDeleteExercise = useCallback((exerciseId: string) => {
+    setExercises((prev) => prev.filter((e) => e.id !== exerciseId));
   }, []);
 
-  const resetForm = () => {
+  const handleUpdateWeight = useCallback(() => {
+    if (!selectedExercise) return;
+
+    const weight = parseFloat(formWeight) || undefined;
+    const reps = parseInt(formReps) || undefined;
+    const sets = parseInt(formSets) || undefined;
+
+    const newEntry: HistoryEntry = {
+      id: generateId(),
+      date: new Date().toISOString(),
+      weight,
+      reps,
+      sets,
+    };
+
+    setExercises((prev) =>
+      prev.map((e) =>
+        e.id === selectedExercise.id 
+          ? { 
+              ...e, 
+              currentWeight: weight, 
+              currentReps: reps, 
+              currentSets: sets,
+              history: [...e.history, newEntry],
+            } 
+          : e
+      )
+    );
+
+    setShowWeightModal(false);
+    setSelectedExercise(null);
     setFormWeight("");
-    setFormReps("10");
-    setFormSets("3");
+    setFormReps("");
+    setFormSets("");
+  }, [selectedExercise, formWeight, formReps, formSets]);
+
+  const handleUpdateBodyweight = useCallback(() => {
+    if (!selectedExercise) return;
+
+    const reps = parseInt(formReps) || undefined;
+    const sets = parseInt(formSets) || undefined;
+
+    const newEntry: HistoryEntry = {
+      id: generateId(),
+      date: new Date().toISOString(),
+      reps,
+      sets,
+      assistanceBand: formBand,
+    };
+
+    setExercises((prev) =>
+      prev.map((e) =>
+        e.id === selectedExercise.id 
+          ? { 
+              ...e, 
+              assistanceBand: formBand, 
+              currentReps: reps, 
+              currentSets: sets,
+              history: [...e.history, newEntry],
+            } 
+          : e
+      )
+    );
+
+    setShowBandModal(false);
+    setSelectedExercise(null);
     setFormBand("none");
-    setFormNotes("");
-  };
+    setFormReps("");
+    setFormSets("");
+  }, [selectedExercise, formBand, formReps, formSets]);
 
-  const openAddWorkout = (exercise: Exercise) => {
+  const handleUpdateDuration = useCallback(() => {
+    if (!selectedExercise) return;
+
+    const mins = parseInt(formMinutes) || 0;
+    const secs = parseInt(formSeconds) || 0;
+    const totalSeconds = mins * 60 + secs;
+
+    if (totalSeconds < 0) return;
+
+    const newEntry: HistoryEntry = {
+      id: generateId(),
+      date: new Date().toISOString(),
+      duration: totalSeconds,
+    };
+
+    setExercises((prev) =>
+      prev.map((e) =>
+        e.id === selectedExercise.id 
+          ? { 
+              ...e, 
+              currentDuration: totalSeconds,
+              history: [...e.history, newEntry],
+            } 
+          : e
+      )
+    );
+
+    setShowTimeModal(false);
+    setSelectedExercise(null);
+    setFormMinutes("0");
+    setFormSeconds("0");
+  }, [selectedExercise, formMinutes, formSeconds]);
+
+  const handleDeleteHistoryEntry = useCallback((exerciseId: string, entryId: string) => {
+    setExercises((prev) =>
+      prev.map((e) => {
+        if (e.id !== exerciseId) return e;
+        
+        const newHistory = e.history.filter(h => h.id !== entryId);
+        const lastEntry = newHistory[newHistory.length - 1];
+        
+        return {
+          ...e,
+          history: newHistory,
+          currentWeight: lastEntry?.weight ?? undefined,
+          currentReps: lastEntry?.reps ?? undefined,
+          currentSets: lastEntry?.sets ?? undefined,
+          currentDuration: lastEntry?.duration ?? undefined,
+          assistanceBand: lastEntry?.assistanceBand ?? undefined,
+        };
+      })
+    );
+  }, []);
+
+  const openWeightModal = (exercise: Exercise) => {
+    if (exercise.type !== "weighted") return;
     setSelectedExercise(exercise);
-    resetForm();
-    setShowAddModal(true);
+    setFormWeight(exercise.currentWeight?.toString() || "");
+    setFormReps(exercise.currentReps?.toString() || "");
+    setFormSets(exercise.currentSets?.toString() || "");
+    setShowWeightModal(true);
   };
 
-  const getExerciseById = (id: string): Exercise | undefined => {
-    return exercises.find((e) => e.id === id);
+  const openBandModal = (exercise: Exercise) => {
+    if (exercise.type !== "bodyweight") return;
+    setSelectedExercise(exercise);
+    setFormBand(exercise.assistanceBand || "none");
+    setFormReps(exercise.currentReps?.toString() || "");
+    setFormSets(exercise.currentSets?.toString() || "");
+    setShowBandModal(true);
   };
 
-  const recentEntries = entries
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    .slice(0, 10);
+  const openTimeModal = (exercise: Exercise) => {
+    if (exercise.type !== "timed") return;
+    setSelectedExercise(exercise);
+    const duration = exercise.currentDuration || 0;
+    setFormMinutes(Math.floor(duration / 60).toString());
+    setFormSeconds((duration % 60).toString());
+    setShowTimeModal(true);
+  };
 
-  const totalWorkouts = entries.length;
-  const uniqueExercises = new Set(entries.map((e) => e.exerciseId)).size;
-  const totalWeight = entries.reduce((sum, e) => sum + (e.weight || 0) * e.reps * e.sets, 0);
+  const openHistoryModal = (exercise: Exercise) => {
+    setSelectedExercise(exercise);
+    setShowHistoryModal(true);
+  };
 
-  const needsWeightIncrease = exercises.filter((ex) => {
-    const days = getDaysSinceLastWorkout(entries, ex.id);
-    return days !== null && days >= 7;
-  });
+  const openExerciseSettings = (exercise: Exercise) => {
+    if (exercise.type === "weighted") {
+      openWeightModal(exercise);
+    } else if (exercise.type === "bodyweight") {
+      openBandModal(exercise);
+    } else {
+      openTimeModal(exercise);
+    }
+  };
+
+  // Group exercises by category
+  const exercisesByCategory = exercises.reduce<Record<string, Exercise[]>>((acc, exercise) => {
+    if (!acc[exercise.category]) {
+      acc[exercise.category] = [];
+    }
+    acc[exercise.category].push(exercise);
+    return acc;
+  }, {});
+
+  const categories = Object.keys(exercisesByCategory).sort();
 
   return (
     <div className="min-h-screen bg-[var(--background)] text-[var(--foreground)]">
@@ -277,17 +476,156 @@ export default function GymTracker() {
         </div>
       )}
 
-      {/* Add Workout Modal */}
-      {showAddModal && selectedExercise && (
+      {/* History Modal */}
+      {showHistoryModal && selectedExercise && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+          <div className="relative w-full max-w-md mx-4 p-6 bg-[var(--surface)] rounded-2xl border border-[var(--border)] animate-scale-in max-h-[80vh] flex flex-col">
+            <button
+              onClick={() => {
+                setShowHistoryModal(false);
+                setSelectedExercise(null);
+              }}
+              className="absolute top-4 right-4 text-[var(--muted)] hover:text-[var(--foreground)] transition-colors"
+              aria-label="Close history modal"
+            >
+              <X size={24} />
+            </button>
+            <div className="flex items-center gap-3 mb-4">
+              <span className="text-3xl">{selectedExercise.icon}</span>
+              <div>
+                <h2 className="text-xl font-bold">{selectedExercise.name}</h2>
+                <p className="text-sm text-[var(--muted)]">Progress History</p>
+              </div>
+            </div>
+
+            {/* PR Badge */}
+            {selectedExercise.history.length > 0 && (
+              <div className="mb-4 p-3 bg-[var(--accent)]/10 rounded-xl border border-[var(--accent)]/30 flex items-center gap-3">
+                <Trophy className="w-5 h-5 text-[var(--accent)]" />
+                <div>
+                  <p className="text-xs text-[var(--muted)]">Personal Record</p>
+                  <p className="font-bold text-[var(--accent)]">
+                    {selectedExercise.type === "weighted" && (
+                      <>{getPR(selectedExercise.history, "weighted")?.weight || 0} kg</>
+                    )}
+                    {selectedExercise.type === "bodyweight" && (
+                      <>{getPR(selectedExercise.history, "bodyweight")?.reps || 0} reps</>
+                    )}
+                    {selectedExercise.type === "timed" && (
+                      <>{formatDuration(getPR(selectedExercise.history, "timed")?.duration || 0)}</>
+                    )}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* History List */}
+            <div className="flex-1 overflow-y-auto space-y-2">
+              {selectedExercise.history.length === 0 ? (
+                <div className="text-center py-8 text-[var(--muted)]">
+                  <History className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                  <p>No history yet</p>
+                  <p className="text-sm">Start tracking to see your progress!</p>
+                </div>
+              ) : (
+                [...selectedExercise.history].reverse().map((entry, index, arr) => {
+                  const prevEntry = arr[index + 1] || null;
+                  const progress = getProgressFromPrevious(entry, prevEntry, selectedExercise.type);
+                  const isPR = isNewPR(entry, selectedExercise.history, selectedExercise.type);
+                  
+                  return (
+                    <div
+                      key={entry.id}
+                      className="group p-3 bg-[var(--surface-elevated)] rounded-xl border border-[var(--border)] flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-3">
+                        {progress === "up" && (
+                          <TrendingUp className="w-4 h-4 text-green-500" />
+                        )}
+                        {progress === "down" && (
+                          <TrendingDown className="w-4 h-4 text-red-500" />
+                        )}
+                        {progress === "same" && (
+                          <div className="w-4 h-4 rounded-full bg-[var(--muted)]/30" />
+                        )}
+                        {progress === null && (
+                          <div className="w-4 h-4" />
+                        )}
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="font-medium">
+                              {selectedExercise.type === "weighted" && (
+                                <>{entry.weight} kg</>
+                              )}
+                              {selectedExercise.type === "bodyweight" && (
+                                <>{entry.reps} reps</>
+                              )}
+                              {selectedExercise.type === "timed" && (
+                                <>{formatDuration(entry.duration || 0)}</>
+                              )}
+                            </p>
+                            {isPR && (
+                              <span className="px-1.5 py-0.5 text-xs font-bold bg-[var(--accent)] text-black rounded">
+                                PR
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-[var(--muted)]">
+                            {formatFullDate(entry.date)}
+                            {selectedExercise.type === "weighted" && entry.reps && entry.sets && (
+                              <> • {entry.reps}×{entry.sets}</>
+                            )}
+                            {selectedExercise.type === "bodyweight" && entry.sets && (
+                              <> • {entry.sets} sets</>
+                            )}
+                            {selectedExercise.type === "bodyweight" && entry.assistanceBand && entry.assistanceBand !== "none" && (
+                              <> • {BAND_LABELS[entry.assistanceBand]}</>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteHistoryEntry(selectedExercise.id, entry.id)}
+                        className="p-1.5 opacity-0 group-hover:opacity-100 text-[var(--muted)] hover:text-[var(--danger)] transition-all"
+                        aria-label="Delete entry"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Add New Entry Button */}
+            <button
+              onClick={() => {
+                setShowHistoryModal(false);
+                openExerciseSettings(selectedExercise);
+              }}
+              className="mt-4 w-full py-3 bg-[var(--accent)] text-black font-bold rounded-xl hover:bg-[var(--accent-glow)] transition-all flex items-center justify-center gap-2"
+            >
+              <Plus size={18} />
+              Add New Entry
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Update Band Modal */}
+      {showBandModal && selectedExercise && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
           <div className="relative w-full max-w-md mx-4 p-6 bg-[var(--surface)] rounded-2xl border border-[var(--border)] animate-scale-in">
             <button
               onClick={() => {
-                setShowAddModal(false);
+                setShowBandModal(false);
                 setSelectedExercise(null);
+                setFormBand("none");
+                setFormReps("");
+                setFormSets("");
               }}
               className="absolute top-4 right-4 text-[var(--muted)] hover:text-[var(--foreground)] transition-colors"
-              aria-label="Close add workout modal"
+              aria-label="Close band modal"
             >
               <X size={24} />
             </button>
@@ -300,45 +638,7 @@ export default function GymTracker() {
             </div>
 
             <div className="space-y-4">
-              {selectedExercise.type === "weighted" && (
-                <div>
-                  <label className="block text-sm font-medium text-[var(--muted)] mb-2">
-                    Weight (kg)
-                  </label>
-                  <input
-                    type="number"
-                    value={formWeight}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormWeight(e.target.value)}
-                    placeholder="Enter weight"
-                    className="w-full px-4 py-3 bg-[var(--surface-elevated)] border border-[var(--border)] rounded-xl text-[var(--foreground)] placeholder:text-[var(--muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
-                  />
-                </div>
-              )}
-
-              {selectedExercise.type === "bodyweight" && (
-                <div>
-                  <label className="block text-sm font-medium text-[var(--muted)] mb-2">
-                    Assistance Band
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {(Object.keys(BAND_LABELS) as AssistanceBand[]).map((band) => (
-                      <button
-                        key={band}
-                        onClick={() => setFormBand(band)}
-                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                          formBand === band
-                            ? "bg-[var(--accent)] text-black"
-                            : "bg-[var(--surface-elevated)] text-[var(--foreground)] hover:bg-[var(--border)]"
-                        }`}
-                      >
-                        {BAND_LABELS[band]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-[var(--muted)] mb-2">
                     Reps
@@ -347,7 +647,9 @@ export default function GymTracker() {
                     type="number"
                     value={formReps}
                     onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormReps(e.target.value)}
-                    className="w-full px-4 py-3 bg-[var(--surface-elevated)] border border-[var(--border)] rounded-xl text-[var(--foreground)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                    placeholder="0"
+                    className="w-full px-4 py-3 bg-[var(--surface-elevated)] border border-[var(--border)] rounded-xl text-[var(--foreground)] placeholder:text-[var(--muted)] focus:outline-none focus:border-[var(--accent)] transition-colors text-xl font-bold text-center"
+                    autoFocus
                   />
                 </div>
                 <div>
@@ -358,30 +660,186 @@ export default function GymTracker() {
                     type="number"
                     value={formSets}
                     onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormSets(e.target.value)}
-                    className="w-full px-4 py-3 bg-[var(--surface-elevated)] border border-[var(--border)] rounded-xl text-[var(--foreground)] focus:outline-none focus:border-[var(--accent)] transition-colors"
+                    placeholder="0"
+                    className="w-full px-4 py-3 bg-[var(--surface-elevated)] border border-[var(--border)] rounded-xl text-[var(--foreground)] placeholder:text-[var(--muted)] focus:outline-none focus:border-[var(--accent)] transition-colors text-xl font-bold text-center"
                   />
                 </div>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-[var(--muted)] mb-2">
-                  Notes (optional)
+                  Assistance Band
                 </label>
-                <textarea
-                  value={formNotes}
-                  onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setFormNotes(e.target.value)}
-                  placeholder="How did it feel?"
-                  rows={2}
-                  className="w-full px-4 py-3 bg-[var(--surface-elevated)] border border-[var(--border)] rounded-xl text-[var(--foreground)] placeholder:text-[var(--muted)] focus:outline-none focus:border-[var(--accent)] transition-colors resize-none"
-                />
+                <div className="grid grid-cols-2 gap-2">
+                  {(Object.keys(BAND_LABELS) as AssistanceBand[]).map((band) => (
+                    <button
+                      key={band}
+                      type="button"
+                      onClick={() => setFormBand(band)}
+                      className={`px-3 py-2 rounded-xl text-sm font-medium transition-all ${
+                        formBand === band
+                          ? "bg-[var(--accent)] text-black"
+                          : "bg-[var(--surface-elevated)] text-[var(--foreground)] hover:bg-[var(--border)]"
+                      }`}
+                    >
+                      {BAND_LABELS[band]}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <button
-                onClick={handleAddEntry}
+                onClick={handleUpdateBodyweight}
                 className="w-full py-4 bg-[var(--accent)] text-black font-bold rounded-xl hover:bg-[var(--accent-glow)] transition-all transform hover:scale-[1.02] flex items-center justify-center gap-2"
               >
                 <Check size={20} />
-                Log Workout
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Update Time Modal */}
+      {showTimeModal && selectedExercise && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+          <div className="relative w-full max-w-md mx-4 p-6 bg-[var(--surface)] rounded-2xl border border-[var(--border)] animate-scale-in">
+            <button
+              onClick={() => {
+                setShowTimeModal(false);
+                setSelectedExercise(null);
+                setFormMinutes("0");
+                setFormSeconds("0");
+              }}
+              className="absolute top-4 right-4 text-[var(--muted)] hover:text-[var(--foreground)] transition-colors"
+              aria-label="Close time modal"
+            >
+              <X size={24} />
+            </button>
+            <div className="flex items-center gap-3 mb-6">
+              <span className="text-3xl">{selectedExercise.icon}</span>
+              <div>
+                <h2 className="text-xl font-bold">{selectedExercise.name}</h2>
+                <p className="text-sm text-[var(--muted)]">{selectedExercise.category}</p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-[var(--muted)] mb-2">
+                  Time
+                </label>
+                <div className="flex items-center gap-3">
+                  <div className="flex-1">
+                    <input
+                      type="number"
+                      min="0"
+                      value={formMinutes}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormMinutes(e.target.value)}
+                      className="w-full px-4 py-3 bg-[var(--surface-elevated)] border border-[var(--border)] rounded-xl text-[var(--foreground)] focus:outline-none focus:border-[var(--accent)] transition-colors text-2xl font-bold text-center"
+                    />
+                    <p className="text-xs text-[var(--muted)] text-center mt-1">minutes</p>
+                  </div>
+                  <span className="text-2xl font-bold text-[var(--muted)]">:</span>
+                  <div className="flex-1">
+                    <input
+                      type="number"
+                      min="0"
+                      max="59"
+                      value={formSeconds}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormSeconds(e.target.value)}
+                      className="w-full px-4 py-3 bg-[var(--surface-elevated)] border border-[var(--border)] rounded-xl text-[var(--foreground)] focus:outline-none focus:border-[var(--accent)] transition-colors text-2xl font-bold text-center"
+                    />
+                    <p className="text-xs text-[var(--muted)] text-center mt-1">seconds</p>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={handleUpdateDuration}
+                className="w-full py-4 bg-[var(--accent)] text-black font-bold rounded-xl hover:bg-[var(--accent-glow)] transition-all transform hover:scale-[1.02] flex items-center justify-center gap-2"
+              >
+                <Check size={20} />
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Update Weight Modal */}
+      {showWeightModal && selectedExercise && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+          <div className="relative w-full max-w-md mx-4 p-6 bg-[var(--surface)] rounded-2xl border border-[var(--border)] animate-scale-in">
+            <button
+              onClick={() => {
+                setShowWeightModal(false);
+                setSelectedExercise(null);
+                setFormWeight("");
+                setFormReps("");
+                setFormSets("");
+              }}
+              className="absolute top-4 right-4 text-[var(--muted)] hover:text-[var(--foreground)] transition-colors"
+              aria-label="Close weight modal"
+            >
+              <X size={24} />
+            </button>
+            <div className="flex items-center gap-3 mb-6">
+              <span className="text-3xl">{selectedExercise.icon}</span>
+              <div>
+                <h2 className="text-xl font-bold">{selectedExercise.name}</h2>
+                <p className="text-sm text-[var(--muted)]">{selectedExercise.category}</p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-[var(--muted)] mb-2">
+                  Weight (kg)
+                </label>
+                <input
+                  type="number"
+                  value={formWeight}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormWeight(e.target.value)}
+                  placeholder="0"
+                  className="w-full px-4 py-3 bg-[var(--surface-elevated)] border border-[var(--border)] rounded-xl text-[var(--foreground)] placeholder:text-[var(--muted)] focus:outline-none focus:border-[var(--accent)] transition-colors text-2xl font-bold text-center"
+                  autoFocus
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-[var(--muted)] mb-2">
+                    Reps
+                  </label>
+                  <input
+                    type="number"
+                    value={formReps}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormReps(e.target.value)}
+                    placeholder="0"
+                    className="w-full px-4 py-3 bg-[var(--surface-elevated)] border border-[var(--border)] rounded-xl text-[var(--foreground)] placeholder:text-[var(--muted)] focus:outline-none focus:border-[var(--accent)] transition-colors text-xl font-bold text-center"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[var(--muted)] mb-2">
+                    Sets
+                  </label>
+                  <input
+                    type="number"
+                    value={formSets}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormSets(e.target.value)}
+                    placeholder="0"
+                    className="w-full px-4 py-3 bg-[var(--surface-elevated)] border border-[var(--border)] rounded-xl text-[var(--foreground)] placeholder:text-[var(--muted)] focus:outline-none focus:border-[var(--accent)] transition-colors text-xl font-bold text-center"
+                  />
+                </div>
+              </div>
+
+              <button
+                onClick={handleUpdateWeight}
+                className="w-full py-4 bg-[var(--accent)] text-black font-bold rounded-xl hover:bg-[var(--accent-glow)] transition-all transform hover:scale-[1.02] flex items-center justify-center gap-2"
+              >
+                <Check size={20} />
+                Save
               </button>
             </div>
           </div>
@@ -399,7 +857,7 @@ export default function GymTracker() {
             >
               <X size={24} />
             </button>
-            <h2 className="text-xl font-bold mb-6">Add Custom Exercise</h2>
+            <h2 className="text-xl font-bold mb-6">Add New Exercise</h2>
 
             <div className="space-y-4">
               <div>
@@ -419,28 +877,39 @@ export default function GymTracker() {
                 <label className="block text-sm font-medium text-[var(--muted)] mb-2">
                   Exercise Type
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <button
                     onClick={() => setNewExerciseType("weighted")}
-                    className={`px-4 py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
+                    className={`px-3 py-3 rounded-xl font-medium transition-all flex flex-col items-center justify-center gap-1 ${
                       newExerciseType === "weighted"
                         ? "bg-[var(--accent)] text-black"
                         : "bg-[var(--surface-elevated)] text-[var(--foreground)] hover:bg-[var(--border)]"
                     }`}
                   >
                     <Dumbbell size={18} />
-                    Weighted
+                    <span className="text-xs">Weighted</span>
                   </button>
                   <button
                     onClick={() => setNewExerciseType("bodyweight")}
-                    className={`px-4 py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
+                    className={`px-3 py-3 rounded-xl font-medium transition-all flex flex-col items-center justify-center gap-1 ${
                       newExerciseType === "bodyweight"
                         ? "bg-[var(--accent)] text-black"
                         : "bg-[var(--surface-elevated)] text-[var(--foreground)] hover:bg-[var(--border)]"
                     }`}
                   >
                     <Target size={18} />
-                    Bodyweight
+                    <span className="text-xs">Bodyweight</span>
+                  </button>
+                  <button
+                    onClick={() => setNewExerciseType("timed")}
+                    className={`px-3 py-3 rounded-xl font-medium transition-all flex flex-col items-center justify-center gap-1 ${
+                      newExerciseType === "timed"
+                        ? "bg-[var(--accent)] text-black"
+                        : "bg-[var(--surface-elevated)] text-[var(--foreground)] hover:bg-[var(--border)]"
+                    }`}
+                  >
+                    <Timer size={18} />
+                    <span className="text-xs">Timed</span>
                   </button>
                 </div>
               </div>
@@ -480,7 +949,7 @@ export default function GymTracker() {
             </div>
             <div>
               <h1 className="text-xl font-bold tracking-tight">LIFT</h1>
-              <p className="text-xs text-[var(--muted)]">Track your gains</p>
+              <p className="text-xs text-[var(--muted)]">Track your progress</p>
             </div>
           </div>
           <button
@@ -498,160 +967,114 @@ export default function GymTracker() {
 
       {/* Main Content */}
       <main className="max-w-4xl mx-auto px-4 py-6 pb-24">
-        {/* Stats Cards */}
-        <div className="grid grid-cols-3 gap-3 mb-8">
-          <div className="p-4 bg-[var(--surface)] rounded-2xl border border-[var(--border)]">
-            <div className="flex items-center gap-2 mb-2">
-              <Trophy className="w-4 h-4 text-[var(--warning)]" />
-              <span className="text-xs text-[var(--muted)]">Workouts</span>
-            </div>
-            <p className="text-2xl font-bold">{totalWorkouts}</p>
-          </div>
-          <div className="p-4 bg-[var(--surface)] rounded-2xl border border-[var(--border)]">
-            <div className="flex items-center gap-2 mb-2">
-              <Target className="w-4 h-4 text-[var(--accent)]" />
-              <span className="text-xs text-[var(--muted)]">Exercises</span>
-            </div>
-            <p className="text-2xl font-bold">{uniqueExercises}</p>
-          </div>
-          <div className="p-4 bg-[var(--surface)] rounded-2xl border border-[var(--border)]">
-            <div className="flex items-center gap-2 mb-2">
-              <Zap className="w-4 h-4 text-[var(--danger)]" />
-              <span className="text-xs text-[var(--muted)]">Total kg</span>
-            </div>
-            <p className="text-2xl font-bold">{totalWeight.toLocaleString()}</p>
-          </div>
-        </div>
-
-        {/* Weight Increase Suggestions */}
-        {needsWeightIncrease.length > 0 && (
-          <div className="mb-8 p-4 bg-gradient-to-r from-[var(--accent)]/10 to-[var(--accent)]/5 rounded-2xl border border-[var(--accent)]/30">
-            <div className="flex items-center gap-2 mb-3">
-              <TrendingUp className="w-5 h-5 text-[var(--accent)]" />
-              <h2 className="font-semibold text-[var(--accent)]">Time to Level Up! 🚀</h2>
-            </div>
-            <p className="text-sm text-[var(--muted)] mb-3">
-              It&apos;s been a week! Consider increasing weights for:
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {needsWeightIncrease.slice(0, 5).map((ex) => (
-                <span
-                  key={ex.id}
-                  className="px-3 py-1 bg-[var(--accent)]/20 text-[var(--accent)] rounded-full text-sm font-medium"
-                >
-                  {ex.icon} {ex.name}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Exercise Selection */}
-        <section className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold">Log Workout</h2>
-            <button
-              onClick={() => setShowExerciseModal(true)}
-              className="flex items-center gap-1 text-sm text-[var(--accent)] hover:text-[var(--accent-glow)] transition-colors"
-            >
-              <Plus size={16} />
-              Add Exercise
-            </button>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {exercises.map((exercise, index) => {
-              const progress = getProgressData(entries, exercise.id);
-              const daysSince = getDaysSinceLastWorkout(entries, exercise.id);
-
-              return (
-                <button
-                  key={exercise.id}
-                  onClick={() => openAddWorkout(exercise)}
-                  className="group p-4 bg-[var(--surface)] rounded-2xl border border-[var(--border)] hover:border-[var(--accent)]/50 transition-all hover:scale-[1.02] text-left animate-slide-up"
-                  style={{ animationDelay: `${index * 50}ms` }}
-                >
-                  <div className="flex items-start justify-between mb-2">
-                    <span className="text-2xl">{exercise.icon}</span>
-                    {progress && progress.percentChange > 0 && (
-                      <span className="flex items-center gap-0.5 text-xs text-[var(--accent)]">
-                        <TrendingUp size={12} />
-                        {progress.percentChange.toFixed(0)}%
-                      </span>
-                    )}
-                  </div>
-                  <h3 className="font-medium text-sm mb-1">{exercise.name}</h3>
-                  <p className="text-xs text-[var(--muted)]">
-                    {exercise.type === "weighted" ? (
-                      progress ? `${progress.current}kg` : "No data"
-                    ) : (
-                      exercise.category
-                    )}
-                  </p>
-                  {daysSince !== null && daysSince >= 7 && (
-                    <div className="mt-2 flex items-center gap-1 text-xs text-[var(--warning)]">
-                      <Star size={10} />
-                      {daysSince}d ago
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* Recent History */}
-        <section>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold">Recent Activity</h2>
-            <div className="flex items-center gap-1 text-sm text-[var(--muted)]">
-              <Calendar size={14} />
-              Last 10
-            </div>
-          </div>
-          {recentEntries.length === 0 ? (
-            <div className="text-center py-12 bg-[var(--surface)] rounded-2xl border border-[var(--border)]">
-              <BarChart3 className="w-12 h-12 mx-auto mb-4 text-[var(--muted)]" />
-              <p className="text-[var(--muted)] mb-2">No workouts yet</p>
-              <p className="text-sm text-[var(--muted)]">Start by logging your first exercise!</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {recentEntries.map((entry, index) => {
-                const exercise = getExerciseById(entry.exerciseId);
-                if (!exercise) return null;
-
+        {/* Exercises by Category */}
+        {categories.map((category, catIndex) => (
+          <section key={category} className="mb-8">
+            <h2 className="text-lg font-semibold mb-4 text-[var(--muted)]">{category}</h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {exercisesByCategory[category].map((exercise, index) => {
+                const pr = getPR(exercise.history, exercise.type);
+                const hasHistory = exercise.history.length > 0;
+                
                 return (
                   <div
-                    key={entry.id}
-                    className="group p-4 bg-[var(--surface)] rounded-xl border border-[var(--border)] flex items-center justify-between animate-slide-up"
-                    style={{ animationDelay: `${index * 30}ms` }}
+                    key={exercise.id}
+                    className="group relative p-4 bg-[var(--surface)] rounded-2xl border border-[var(--border)] hover:border-[var(--accent)]/50 transition-all hover:scale-[1.02] text-left animate-slide-up cursor-pointer"
+                    style={{ animationDelay: `${(catIndex * 4 + index) * 50}ms` }}
+                    onClick={() => openExerciseSettings(exercise)}
                   >
-                    <div className="flex items-center gap-3">
-                      <span className="text-xl">{exercise.icon}</span>
-                      <div>
-                        <h3 className="font-medium text-sm">{exercise.name}</h3>
-                        <p className="text-xs text-[var(--muted)]">
-                          {formatDate(entry.date)} • {entry.sets}x{entry.reps}
-                          {entry.weight && ` @ ${entry.weight}kg`}
-                          {entry.assistanceBand && entry.assistanceBand !== "none" && (
-                            <span className="ml-1">({BAND_LABELS[entry.assistanceBand]})</span>
-                          )}
-                        </p>
-                      </div>
-                    </div>
+                    {/* Delete Button */}
                     <button
-                      onClick={() => handleDeleteEntry(entry.id)}
-                      className="p-2 opacity-0 group-hover:opacity-100 text-[var(--muted)] hover:text-[var(--danger)] transition-all"
-                      aria-label="Delete entry"
+                      onClick={(e: React.MouseEvent) => {
+                        e.stopPropagation();
+                        handleDeleteExercise(exercise.id);
+                      }}
+                      className="absolute top-2 right-2 p-1.5 opacity-0 group-hover:opacity-100 text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10 rounded-lg transition-all"
+                      aria-label={`Delete ${exercise.name}`}
                     >
-                      <Trash2 size={16} />
+                      <Trash2 size={14} />
                     </button>
+
+                    {/* History Button */}
+                    {hasHistory && (
+                      <button
+                        onClick={(e: React.MouseEvent) => {
+                          e.stopPropagation();
+                          openHistoryModal(exercise);
+                        }}
+                        className="absolute top-2 right-9 p-1.5 opacity-0 group-hover:opacity-100 text-[var(--muted)] hover:text-[var(--accent)] hover:bg-[var(--accent)]/10 rounded-lg transition-all"
+                        aria-label={`View history for ${exercise.name}`}
+                      >
+                        <History size={14} />
+                      </button>
+                    )}
+
+                    <div className="flex items-start justify-between mb-2">
+                      <span className="text-2xl">{exercise.icon}</span>
+                      {pr && (
+                        <span className="flex items-center gap-1 text-xs text-[var(--accent)] bg-[var(--accent)]/10 px-1.5 py-0.5 rounded">
+                          <Trophy size={10} />
+                          {exercise.type === "weighted" && `${pr.weight}kg`}
+                          {exercise.type === "bodyweight" && `${pr.reps}`}
+                          {exercise.type === "timed" && formatDuration(pr.duration || 0)}
+                        </span>
+                      )}
+                    </div>
+                    <h3 className="font-medium text-sm mb-1">{exercise.name}</h3>
+                    {exercise.type === "weighted" && (
+                      <div>
+                        <p className="text-lg font-bold text-[var(--accent)]">
+                          {exercise.currentWeight ? `${exercise.currentWeight} kg` : "—"}
+                        </p>
+                        {(exercise.currentReps || exercise.currentSets) && (
+                          <p className="text-xs text-[var(--muted)]">
+                            {exercise.currentReps || 0} reps × {exercise.currentSets || 0} sets
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {exercise.type === "bodyweight" && (
+                      <div>
+                        {(exercise.currentReps || exercise.currentSets) ? (
+                          <>
+                            <p className="text-lg font-bold text-[var(--accent)]">
+                              {exercise.currentReps || 0} reps × {exercise.currentSets || 0}
+                            </p>
+                            <p className="text-xs text-[var(--muted)]">
+                              {BAND_LABELS[exercise.assistanceBand || "none"]}
+                            </p>
+                          </>
+                        ) : (
+                          <p className="text-sm font-medium text-[var(--accent)]">
+                            {BAND_LABELS[exercise.assistanceBand || "none"]}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {exercise.type === "timed" && (
+                      <p className="text-xl font-bold text-[var(--accent)]">
+                        {exercise.currentDuration ? formatDuration(exercise.currentDuration) : "—"}
+                      </p>
+                    )}
+                    {hasHistory && (
+                      <p className="text-xs text-[var(--muted)] mt-1">
+                        {exercise.history.length} {exercise.history.length === 1 ? "entry" : "entries"}
+                      </p>
+                    )}
                   </div>
                 );
               })}
             </div>
-          )}
-        </section>
+          </section>
+        ))}
+
+        {exercises.length === 0 && (
+          <div className="text-center py-16 bg-[var(--surface)] rounded-2xl border border-[var(--border)]">
+            <Dumbbell className="w-12 h-12 mx-auto mb-4 text-[var(--muted)]" />
+            <p className="text-[var(--muted)] mb-2">No exercises yet</p>
+            <p className="text-sm text-[var(--muted)]">Add your first exercise to get started!</p>
+          </div>
+        )}
       </main>
 
       {/* Floating Action Button */}
@@ -661,7 +1084,7 @@ export default function GymTracker() {
           className="px-6 py-4 bg-[var(--accent)] text-black font-bold rounded-full shadow-lg shadow-[var(--accent)]/30 hover:bg-[var(--accent-glow)] transition-all transform hover:scale-105 flex items-center gap-2"
         >
           <Plus size={20} />
-          Log Workout
+          Add Exercise
         </button>
       </div>
     </div>
